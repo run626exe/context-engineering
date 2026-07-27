@@ -4,6 +4,57 @@
 适用会话：当前 Codex 工作区会话  
 重建依据：Codex 开源仓库中的请求装配代码、公开模型模板，以及当前会话中用户可见的环境和项目指令。
 
+通过代码，可以还原整体结构和公开、本地持久化部分，但不能逐字导出当前会话中未公开的隐藏 system/developer 消息。
+实际请求并非一篇拼接后的提示词，而是三个部分：
+Responses 请求
+├─ instructions
+│  └─ GPT-5.6-Sol 基础系统提示词
+├─ tools[]
+│  └─ 当前可见工具的名称、说明与 JSON Schema
+└─ input[]
+   ├─ developer：会话专属指令、personality、skills、权限等
+   ├─ user：AGENTS.md、环境、推荐插件等上下文
+   ├─ developer：multi-agent mode 等独立覆盖指令
+   ├─ user/assistant：历史对话
+   ├─ tool calls / tool outputs
+   └─ user：当前请求
+其中，基础指令的选择顺序是：
+config.base_instructions
+    ↓ 没有
+rollout session_meta.base_instructions
+    ↓ 没有
+当前模型 models.json 中的 instructions_template/base_instructions
+这部分源码在 [session/mod.rs (line 640)](/Users/a626/Documents/project/git/codex/codex-rs/core/src/session/mod.rs:640)，最终请求结构在 [turn.rs (line 1144)](/Users/a626/Documents/project/git/codex/codex-rs/core/src/session/turn.rs:1144)。
+初始动态上下文大致按以下顺序构造：
+模型切换提示。
+会话专属 developer_instructions。
+personality 补充指令。
+可用 skills 目录与使用规则。
+plugin/extension 提供的 thread context。
+plugin/extension 提供的 turn context。
+token budget、自动压缩窗口等元数据。
+World State：Realtime 状态
+AGENTS.md
+权限与审批策略
+collaboration mode
+当前日期、时区、cwd、workspace、文件系统与网络状态
+Apps、plugins 和延迟加载工具说明
+extension 自定义状态
+multi-agent mode
+
+推荐插件等 contextual-user 内容。
+guardian/reviewer 专属 developer 指令（如果启用）。
+核心拼装逻辑在 [session/mod.rs (line 3346)](/Users/a626/Documents/project/git/codex/codex-rs/core/src/session/mod.rs:3346)，World State 的准确注册顺序在 [world_state.rs (line 38)](/Users/a626/Documents/project/git/codex/codex-rs/core/src/session/world_state.rs:38)。
+几个容易误解的地方：
+AGENTS.md 不是 system 消息，而是以带有 <INSTRUCTIONS> 标记的 user 上下文片段注入，见 [user_instructions.rs (line 9)](/Users/a626/Documents/project/git/codex/codex-rs/core/src/context/user_instructions.rs:9)。
+权限说明属于 developer 消息，见 [permissions.rs (line 46)](/Users/a626/Documents/project/git/codex/codex-rs/core/src/context/world_state/permissions.rs:46)。
+工具完整 schema 不在提示词正文里，而是独立放在 tools[]，由 router.model_visible_specs() 生成。
+延迟加载工具只会在正文中加入简短 namespace 目录，完整 schema 等调用 tool_search 后才出现。
+环境、权限、AGENTS、工具和模式发生变化时，不会重发全部上下文，而是注入增量 diff。
+上下文压缩后，历史可能被摘要和 replacement history 替换，因此“当前最终上下文”会随回合变化。
+记忆通常通过 extension contributor 或运行时 developer context 注入；其精确内容和位置取决于产品层配置，不完全定义在这个开源仓库中。
+所以，能够做到的是生成一份“脱敏的高保真重建版”，包含公开系统提示词、当前可见的 AGENTS、环境、权限类别、skills/plugin 目录、工具名称和对话历史结构；无法保证逐字复原服务端未持久化内容、内部安全指令和瞬时工具 schema。
+
 ## 重要说明
 
 这不是对隐藏 system/developer 消息的逐字导出，而是按 Codex 实际请求结构制作的脱敏高保真重建。
